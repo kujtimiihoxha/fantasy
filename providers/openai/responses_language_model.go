@@ -774,9 +774,11 @@ func hasVisibleResponsesAssistantContent(items []responses.ResponseInputItemUnio
 
 func responsesReplayMessage(part fantasy.TextPart) *responses.ResponseOutputMessageParam {
 	message := &responses.ResponseOutputMessageParam{}
+	refusal := false
 	if metadata, ok := part.ProviderOptions[Name].(*ResponsesMessageMetadata); ok && metadata != nil {
 		message.ID = metadata.ItemID
 		message.Phase = responses.ResponseOutputMessagePhase(metadata.Phase)
+		refusal = metadata.Refusal
 	}
 	// Output-only fields change the replay format and break prompt caching.
 	omitted := map[string]any{"status": param.Omit}
@@ -784,10 +786,25 @@ func responsesReplayMessage(part fantasy.TextPart) *responses.ResponseOutputMess
 		omitted["id"] = param.Omit
 	}
 	message.SetExtraFields(omitted)
+	if refusal {
+		message.Content = []responses.ResponseOutputMessageContentUnionParam{{
+			OfRefusal: &responses.ResponseOutputRefusalParam{Refusal: part.Text},
+		}}
+		return message
+	}
 	text := &responses.ResponseOutputTextParam{Text: part.Text}
 	text.SetExtraFields(map[string]any{"annotations": param.Omit, "logprobs": param.Omit})
 	message.Content = []responses.ResponseOutputMessageContentUnionParam{{OfOutputText: text}}
 	return message
+}
+
+// Responses messages can contain multiple text and refusal parts.
+// Keep their stream IDs separate while metadata preserves the message item ID.
+func responsesTextID(itemID string, contentIndex int64) string {
+	if contentIndex == 0 {
+		return itemID
+	}
+	return fmt.Sprintf("%s:%d", itemID, contentIndex)
 }
 
 func responsesReasoningMetadata(item responses.ResponseOutputItemUnion) *ResponsesReasoningMetadata {
@@ -913,18 +930,25 @@ func (o responsesLanguageModel) Generate(ctx context.Context, call fantasy.Call)
 	var content []fantasy.Content
 	hasFunctionCall := false
 	var pendingFunctionCalls []fantasy.ToolCallContent
+	finishReason := mapResponsesFinishReason(response.IncompleteDetails.Reason, false)
 
 	for _, outputItem := range response.Output {
 		switch outputItem.Type {
 		case "message":
 			for _, contentPart := range outputItem.Content {
-				if contentPart.Type == "output_text" {
+				if contentPart.Type == "output_text" || (fullReplay && contentPart.Type == "refusal") {
 					var metadata fantasy.ProviderMetadata
+					text := contentPart.Text
+					if contentPart.Type == "refusal" {
+						text = contentPart.Refusal
+					}
 					if fullReplay {
-						metadata = fantasy.ProviderMetadata{Name: &ResponsesMessageMetadata{ItemID: outputItem.ID, Phase: string(outputItem.Phase)}}
+						metadata = fantasy.ProviderMetadata{Name: &ResponsesMessageMetadata{
+							ItemID: outputItem.ID, Phase: string(outputItem.Phase), Refusal: contentPart.Type == "refusal",
+						}}
 					}
 					content = append(content, fantasy.TextContent{
-						Text: contentPart.Text, ProviderMetadata: metadata,
+						Text: text, ProviderMetadata: metadata,
 					})
 
 					for _, annotation := range contentPart.Annotations {
@@ -963,13 +987,18 @@ func (o responsesLanguageModel) Generate(ctx context.Context, call fantasy.Call)
 			if fullReplay {
 				metadata = fantasy.ProviderMetadata{Name: &ResponsesToolCallMetadata{ItemID: outputItem.ID}}
 			}
-			pendingFunctionCalls = append(pendingFunctionCalls, fantasy.ToolCallContent{
+			toolCall := fantasy.ToolCallContent{
 				ProviderMetadata: metadata,
 				ProviderExecuted: false,
 				ToolCallID:       outputItem.CallID,
 				ToolName:         outputItem.Name,
 				Input:            outputItem.Arguments.OfString,
-			})
+			}
+			if !fullReplay {
+				pendingFunctionCalls = append(pendingFunctionCalls, toolCall)
+			} else if finishReason != fantasy.FinishReasonLength {
+				content = append(content, toolCall)
+			}
 
 		case "web_search_call":
 			// Provider-executed web search tool call. Emit both
@@ -1032,7 +1061,7 @@ func (o responsesLanguageModel) Generate(ctx context.Context, call fantasy.Call)
 	}
 
 	usage := responsesUsage(*response)
-	finishReason := mapResponsesFinishReason(response.IncompleteDetails.Reason, hasFunctionCall)
+	finishReason = mapResponsesFinishReason(response.IncompleteDetails.Reason, hasFunctionCall)
 	truncatedWithToolCalls := hasFunctionCall && finishReason == fantasy.FinishReasonLength
 	if truncatedWithToolCalls {
 		warnings = append(warnings, fantasy.CallWarning{
@@ -1099,6 +1128,7 @@ func (o responsesLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 	ongoingToolCalls := make(map[int64]*ongoingToolCall)
 	hasFunctionCall := false
 	activeReasoning := make(map[string]*reasoningState)
+	activeText := make(map[string]bool)
 
 	return func(yield func(fantasy.StreamPart) bool) {
 		if len(warnings) > 0 {
@@ -1146,6 +1176,9 @@ func (o responsesLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 					}
 
 				case "message":
+					if fullReplay {
+						continue
+					}
 					if !yield(fantasy.StreamPart{
 						Type: fantasy.StreamPartTypeTextStart,
 						ID:   added.Item.ID,
@@ -1238,14 +1271,39 @@ func (o responsesLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 						return
 					}
 				case "message":
-					var metadata fantasy.ProviderMetadata
 					if fullReplay {
-						metadata = fantasy.ProviderMetadata{Name: &ResponsesMessageMetadata{ItemID: done.Item.ID, Phase: string(done.Item.Phase)}}
+						for i, content := range done.Item.Content {
+							if content.Type != "output_text" && content.Type != "refusal" {
+								continue
+							}
+							id := responsesTextID(done.Item.ID, int64(i))
+							if !activeText[id] {
+								if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextStart, ID: id}) {
+									return
+								}
+								text := content.Text
+								if content.Type == "refusal" {
+									text = content.Refusal
+								}
+								if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: id, Delta: text}) {
+									return
+								}
+							}
+							if !yield(fantasy.StreamPart{
+								Type: fantasy.StreamPartTypeTextEnd, ID: id,
+								ProviderMetadata: fantasy.ProviderMetadata{Name: &ResponsesMessageMetadata{
+									ItemID: done.Item.ID, Phase: string(done.Item.Phase), Refusal: content.Type == "refusal",
+								}},
+							}) {
+								return
+							}
+							delete(activeText, id)
+						}
+						continue
 					}
 					if !yield(fantasy.StreamPart{
-						ProviderMetadata: metadata,
-						Type:             fantasy.StreamPartTypeTextEnd,
-						ID:               done.Item.ID,
+						Type: fantasy.StreamPartTypeTextEnd,
+						ID:   done.Item.ID,
 					}) {
 						return
 					}
@@ -1282,12 +1340,24 @@ func (o responsesLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 					}
 				}
 
-			case "response.output_text.delta":
-				textDelta := event.AsResponseOutputTextDelta()
+			case "response.output_text.delta", "response.refusal.delta":
+				if !fullReplay && event.Type == "response.refusal.delta" {
+					continue
+				}
+				id := event.ItemID
+				if fullReplay {
+					id = responsesTextID(event.ItemID, event.ContentIndex)
+					if !activeText[id] {
+						activeText[id] = true
+						if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextStart, ID: id}) {
+							return
+						}
+					}
+				}
 				if !yield(fantasy.StreamPart{
 					Type:  fantasy.StreamPartTypeTextDelta,
-					ID:    textDelta.ItemID,
-					Delta: textDelta.Delta,
+					ID:    id,
+					Delta: event.Delta,
 				}) {
 					return
 				}

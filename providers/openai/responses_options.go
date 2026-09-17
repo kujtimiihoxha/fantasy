@@ -122,6 +122,8 @@ type ResponsesReasoningMetadata struct {
 type ResponsesMessageMetadata struct {
 	ItemID string `json:"item_id"`
 	Phase  string `json:"phase,omitempty"`
+	// Refusal preserves the content type while TextContent carries the visible text.
+	Refusal bool `json:"refusal,omitempty"`
 }
 
 // Options implements the ProviderOptionsData interface.
