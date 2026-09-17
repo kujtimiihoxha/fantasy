@@ -208,7 +208,7 @@ func (o responsesLanguageModel) prepareParams(call fantasy.Call) (*responses.Res
 	}
 
 	storeEnabled := openaiOptions != nil && openaiOptions.Store != nil && *openaiOptions.Store
-	input, inputWarnings := toResponsesPrompt(call.Prompt, modelConfig.systemMessageMode, storeEnabled)
+	input, inputWarnings := toResponsesPrompt(call.Prompt, modelConfig.systemMessageMode, storeEnabled, useFullReplay(call.ProviderOptions))
 	warnings = append(warnings, inputWarnings...)
 
 	var include []IncludeType
@@ -423,7 +423,12 @@ func responsesUsage(resp responses.Response) fantasy.Usage {
 	return usage
 }
 
-func toResponsesPrompt(prompt fantasy.Prompt, systemMessageMode string, store bool) (responses.ResponseInputParam, []fantasy.CallWarning) {
+func useFullReplay(options fantasy.ProviderOptions) bool {
+	opts, ok := options[Name].(*ResponsesProviderOptions)
+	return ok && opts != nil && opts.FullReplay
+}
+
+func toResponsesPrompt(prompt fantasy.Prompt, systemMessageMode string, store, fullReplay bool) (responses.ResponseInputParam, []fantasy.CallWarning) {
 	var input responses.ResponseInputParam
 	var warnings []fantasy.CallWarning
 
@@ -557,7 +562,20 @@ func toResponsesPrompt(prompt fantasy.Prompt, systemMessageMode string, store bo
 						})
 						continue
 					}
-					input = append(input, responses.ResponseInputItemParamOfMessage(textPart.Text, responses.EasyInputMessageRoleAssistant))
+					if !fullReplay {
+						input = append(input, responses.ResponseInputItemParamOfMessage(textPart.Text, responses.EasyInputMessageRoleAssistant))
+						continue
+					}
+					message := responsesReplayMessage(textPart)
+					// Multiple text parts from one output item must keep one item ID.
+					if len(input) > startIdx && message.ID != "" {
+						previous := input[len(input)-1].OfOutputMessage
+						if previous != nil && previous.ID == message.ID && previous.Phase == message.Phase {
+							previous.Content = append(previous.Content, message.Content...)
+							continue
+						}
+					}
+					input = append(input, responses.ResponseInputItemUnionParam{OfOutputMessage: message})
 
 				case fantasy.ContentTypeToolCall:
 					toolCallPart, ok := fantasy.AsContentType[fantasy.ToolCallPart](c)
@@ -583,19 +601,48 @@ func toResponsesPrompt(prompt fantasy.Prompt, systemMessageMode string, store bo
 						continue
 					}
 
-					input = append(input, responses.ResponseInputItemParamOfFunctionCall(toolCallPart.Input, toolCallPart.ToolCallID, toolCallPart.ToolName))
+					item := responses.ResponseInputItemParamOfFunctionCall(toolCallPart.Input, toolCallPart.ToolCallID, toolCallPart.ToolName)
+					if metadata, ok := toolCallPart.ProviderOptions[Name].(*ResponsesToolCallMetadata); fullReplay && ok && metadata != nil && metadata.ItemID != "" {
+						item.OfFunctionCall.ID = param.NewOpt(metadata.ItemID)
+					}
+					input = append(input, item)
 				case fantasy.ContentTypeSource:
 					// Source citations from web search are not a
 					// recognised Responses API input type; skip.
 					continue
 				case fantasy.ContentTypeReasoning:
-					// Reasoning items are always skipped during replay.
-					// When store is enabled, the API already has them
-					// persisted server-side. When store is disabled, the
-					// item IDs are ephemeral and referencing them causes
-					// "Item not found" errors. In both cases, replaying
-					// reasoning inline is not supported by the API.
-					continue
+					if !fullReplay {
+						continue
+					}
+					reasoningPart, ok := fantasy.AsContentType[fantasy.ReasoningPart](c)
+					if !ok {
+						warnings = append(warnings, fantasy.CallWarning{
+							Type:    fantasy.CallWarningTypeOther,
+							Message: "assistant message reasoning part does not have the right type",
+						})
+						continue
+					}
+					metadata := GetReasoningMetadata(reasoningPart.ProviderOptions)
+					if metadata == nil || metadata.ItemID == "" {
+						warnings = append(warnings, fantasy.CallWarning{
+							Type:    fantasy.CallWarningTypeOther,
+							Message: "full replay requires OpenAI reasoning metadata with an item ID",
+						})
+						continue
+					}
+					reasoning := &responses.ResponseReasoningItemParam{
+						ID: metadata.ItemID, Summary: make([]responses.ResponseReasoningItemSummaryParam, 0, len(metadata.Summary)),
+					}
+					if metadata.EncryptedContent != nil {
+						reasoning.EncryptedContent = param.NewOpt(*metadata.EncryptedContent)
+					}
+					for _, text := range metadata.Summary {
+						reasoning.Summary = append(reasoning.Summary, responses.ResponseReasoningItemSummaryParam{Text: text})
+					}
+					for _, text := range metadata.Content {
+						reasoning.Content = append(reasoning.Content, responses.ResponseReasoningItemContentParam{Text: text})
+					}
+					input = append(input, responses.ResponseInputItemUnionParam{OfReasoning: reasoning})
 				}
 			}
 
@@ -718,11 +765,45 @@ func hasVisibleResponsesUserContent(content responses.ResponseInputMessageConten
 func hasVisibleResponsesAssistantContent(items []responses.ResponseInputItemUnionParam, startIdx int) bool {
 	// Check if we added any assistant content parts from this message
 	for i := startIdx; i < len(items); i++ {
-		if items[i].OfMessage != nil || items[i].OfFunctionCall != nil || items[i].OfItemReference != nil {
+		if items[i].OfMessage != nil || items[i].OfOutputMessage != nil || items[i].OfReasoning != nil || items[i].OfFunctionCall != nil || items[i].OfItemReference != nil {
 			return true
 		}
 	}
 	return false
+}
+
+func responsesReplayMessage(part fantasy.TextPart) *responses.ResponseOutputMessageParam {
+	message := &responses.ResponseOutputMessageParam{}
+	if metadata, ok := part.ProviderOptions[Name].(*ResponsesMessageMetadata); ok && metadata != nil {
+		message.ID = metadata.ItemID
+		message.Phase = responses.ResponseOutputMessagePhase(metadata.Phase)
+	}
+	// Output-only fields change the replay format and break prompt caching.
+	omitted := map[string]any{"status": param.Omit}
+	if message.ID == "" {
+		omitted["id"] = param.Omit
+	}
+	message.SetExtraFields(omitted)
+	text := &responses.ResponseOutputTextParam{Text: part.Text}
+	text.SetExtraFields(map[string]any{"annotations": param.Omit, "logprobs": param.Omit})
+	message.Content = []responses.ResponseOutputMessageContentUnionParam{{OfOutputText: text}}
+	return message
+}
+
+func responsesReasoningMetadata(item responses.ResponseOutputItemUnion) *ResponsesReasoningMetadata {
+	metadata := &ResponsesReasoningMetadata{ItemID: item.ID, Summary: []string{}}
+	if item.EncryptedContent != "" {
+		metadata.EncryptedContent = &item.EncryptedContent
+	}
+	for _, summary := range item.Summary {
+		metadata.Summary = append(metadata.Summary, summary.Text)
+	}
+	for _, content := range item.Content {
+		if content.Type == "reasoning_text" {
+			metadata.Content = append(metadata.Content, content.Text)
+		}
+	}
+	return metadata
 }
 
 func toResponsesTools(tools []fantasy.Tool, toolChoice *fantasy.ToolChoice, options *ResponsesProviderOptions) ([]responses.ToolUnionParam, responses.ResponseNewParamsToolChoiceUnion, []fantasy.CallWarning) {
@@ -806,6 +887,7 @@ func toResponsesTools(tools []fantasy.Tool, toolChoice *fantasy.ToolChoice, opti
 }
 
 func (o responsesLanguageModel) Generate(ctx context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	fullReplay := useFullReplay(call.ProviderOptions)
 	capture := responseCapture{}
 	params, warnings, err := o.prepareParams(call)
 	if err != nil {
@@ -837,8 +919,12 @@ func (o responsesLanguageModel) Generate(ctx context.Context, call fantasy.Call)
 		case "message":
 			for _, contentPart := range outputItem.Content {
 				if contentPart.Type == "output_text" {
+					var metadata fantasy.ProviderMetadata
+					if fullReplay {
+						metadata = fantasy.ProviderMetadata{Name: &ResponsesMessageMetadata{ItemID: outputItem.ID, Phase: string(outputItem.Phase)}}
+					}
 					content = append(content, fantasy.TextContent{
-						Text: contentPart.Text,
+						Text: contentPart.Text, ProviderMetadata: metadata,
 					})
 
 					for _, annotation := range contentPart.Annotations {
@@ -873,7 +959,12 @@ func (o responsesLanguageModel) Generate(ctx context.Context, call fantasy.Call)
 
 		case "function_call":
 			hasFunctionCall = true
+			var metadata fantasy.ProviderMetadata
+			if fullReplay {
+				metadata = fantasy.ProviderMetadata{Name: &ResponsesToolCallMetadata{ItemID: outputItem.ID}}
+			}
 			pendingFunctionCalls = append(pendingFunctionCalls, fantasy.ToolCallContent{
+				ProviderMetadata: metadata,
 				ProviderExecuted: false,
 				ToolCallID:       outputItem.CallID,
 				ToolName:         outputItem.Name,
@@ -903,6 +994,13 @@ func (o responsesLanguageModel) Generate(ctx context.Context, call fantasy.Call)
 				},
 			})
 		case "reasoning":
+			if fullReplay {
+				metadata := responsesReasoningMetadata(outputItem)
+				content = append(content, fantasy.ReasoningContent{
+					Text: strings.Join(metadata.Summary, "\n"), ProviderMetadata: fantasy.ProviderMetadata{Name: metadata},
+				})
+				continue
+			}
 			metadata := &ResponsesReasoningMetadata{
 				ItemID: outputItem.ID,
 			}
@@ -980,6 +1078,7 @@ func mapResponsesFinishReason(reason string, hasFunctionCall bool) fantasy.Finis
 }
 
 func (o responsesLanguageModel) Stream(ctx context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+	fullReplay := useFullReplay(call.ProviderOptions)
 	capture := responseCapture{}
 	params, warnings, err := o.prepareParams(call)
 	if err != nil {
@@ -1092,11 +1191,16 @@ func (o responsesLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 						}) {
 							return
 						}
+						var metadata fantasy.ProviderMetadata
+						if fullReplay {
+							metadata = fantasy.ProviderMetadata{Name: &ResponsesToolCallMetadata{ItemID: done.Item.ID}}
+						}
 						if !yield(fantasy.StreamPart{
-							Type:          fantasy.StreamPartTypeToolCall,
-							ID:            done.Item.CallID,
-							ToolCallName:  done.Item.Name,
-							ToolCallInput: done.Item.Arguments.OfString,
+							ProviderMetadata: metadata,
+							Type:             fantasy.StreamPartTypeToolCall,
+							ID:               done.Item.CallID,
+							ToolCallName:     done.Item.Name,
+							ToolCallInput:    done.Item.Arguments.OfString,
 						}) {
 							return
 						}
@@ -1134,9 +1238,14 @@ func (o responsesLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 						return
 					}
 				case "message":
+					var metadata fantasy.ProviderMetadata
+					if fullReplay {
+						metadata = fantasy.ProviderMetadata{Name: &ResponsesMessageMetadata{ItemID: done.Item.ID, Phase: string(done.Item.Phase)}}
+					}
 					if !yield(fantasy.StreamPart{
-						Type: fantasy.StreamPartTypeTextEnd,
-						ID:   done.Item.ID,
+						ProviderMetadata: metadata,
+						Type:             fantasy.StreamPartTypeTextEnd,
+						ID:               done.Item.ID,
 					}) {
 						return
 					}
@@ -1144,6 +1253,9 @@ func (o responsesLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 				case "reasoning":
 					state := activeReasoning[done.Item.ID]
 					if state != nil {
+						if fullReplay {
+							state.metadata = responsesReasoningMetadata(done.Item)
+						}
 						if !yield(fantasy.StreamPart{
 							Type: fantasy.StreamPartTypeReasoningEnd,
 							ID:   done.Item.ID,

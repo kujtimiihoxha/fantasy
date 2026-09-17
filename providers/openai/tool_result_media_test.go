@@ -328,7 +328,7 @@ func TestToResponsesPrompt_MediaToolResult_ImagePNG(t *testing.T) {
 		},
 	}
 
-	input, warnings := toResponsesPrompt(prompt, "system", false)
+	input, warnings := toResponsesPrompt(prompt, "system", false, false)
 
 	require.Empty(t, warnings)
 	// Assistant function call + function_call_output + synthetic user image
@@ -373,7 +373,7 @@ func TestToResponsesPrompt_MediaToolResult_UnsupportedMediaType(t *testing.T) {
 		},
 	}
 
-	input, warnings := toResponsesPrompt(prompt, "system", false)
+	input, warnings := toResponsesPrompt(prompt, "system", false, false)
 
 	// Assistant function call + function_call_output, but no synthetic user
 	// image message.

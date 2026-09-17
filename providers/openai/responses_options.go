@@ -15,11 +15,27 @@ const (
 	TypeResponsesProviderMetadata  = Name + ".responses.metadata"
 	TypeResponsesProviderOptions   = Name + ".responses.options"
 	TypeResponsesReasoningMetadata = Name + ".responses.reasoning_metadata"
+	TypeResponsesMessageMetadata   = Name + ".responses.message_metadata"
+	TypeResponsesToolCallMetadata  = Name + ".responses.tool_call_metadata"
 	TypeWebSearchCallMetadata      = Name + ".responses.web_search_call_metadata"
 )
 
 // Register OpenAI Responses API-specific types with the global registry.
 func init() {
+	fantasy.RegisterProviderType(TypeResponsesMessageMetadata, func(data []byte) (fantasy.ProviderOptionsData, error) {
+		var v ResponsesMessageMetadata
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, err
+		}
+		return &v, nil
+	})
+	fantasy.RegisterProviderType(TypeResponsesToolCallMetadata, func(data []byte) (fantasy.ProviderOptionsData, error) {
+		var v ResponsesToolCallMetadata
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, err
+		}
+		return &v, nil
+	})
 	fantasy.RegisterProviderType(TypeResponsesProviderMetadata, func(data []byte) (fantasy.ProviderOptionsData, error) {
 		var v ResponsesProviderMetadata
 		if err := json.Unmarshal(data, &v); err != nil {
@@ -99,6 +115,48 @@ type ResponsesReasoningMetadata struct {
 	ItemID           string   `json:"item_id"`
 	EncryptedContent *string  `json:"encrypted_content"`
 	Summary          []string `json:"summary"`
+	Content          []string `json:"content,omitempty"`
+}
+
+// ResponsesMessageMetadata preserves the output message identity for full replay.
+type ResponsesMessageMetadata struct {
+	ItemID string `json:"item_id"`
+	Phase  string `json:"phase,omitempty"`
+}
+
+// Options implements the ProviderOptionsData interface.
+func (*ResponsesMessageMetadata) Options() {}
+
+// MarshalJSON includes the provider type for stored history.
+func (m ResponsesMessageMetadata) MarshalJSON() ([]byte, error) {
+	type plain ResponsesMessageMetadata
+	return fantasy.MarshalProviderType(TypeResponsesMessageMetadata, plain(m))
+}
+
+// UnmarshalJSON restores metadata from stored history.
+func (m *ResponsesMessageMetadata) UnmarshalJSON(data []byte) error {
+	type plain ResponsesMessageMetadata
+	return fantasy.UnmarshalProviderType(data, (*plain)(m))
+}
+
+// ResponsesToolCallMetadata preserves the item ID separately from the tool call ID.
+type ResponsesToolCallMetadata struct {
+	ItemID string `json:"item_id"`
+}
+
+// Options implements the ProviderOptionsData interface.
+func (*ResponsesToolCallMetadata) Options() {}
+
+// MarshalJSON includes the provider type for stored history.
+func (m ResponsesToolCallMetadata) MarshalJSON() ([]byte, error) {
+	type plain ResponsesToolCallMetadata
+	return fantasy.MarshalProviderType(TypeResponsesToolCallMetadata, plain(m))
+}
+
+// UnmarshalJSON restores metadata from stored history.
+func (m *ResponsesToolCallMetadata) UnmarshalJSON(data []byte) error {
+	type plain ResponsesToolCallMetadata
+	return fantasy.UnmarshalProviderType(data, (*plain)(m))
 }
 
 // Options implements the ProviderOptions interface.
@@ -159,6 +217,9 @@ const (
 
 // ResponsesProviderOptions represents additional options for OpenAI Responses API.
 type ResponsesProviderOptions struct {
+	// FullReplay preserves reasoning, message IDs, phases, and function call item IDs.
+	// Enable it only for backends that accept inline reasoning with Store disabled.
+	FullReplay        bool           `json:"full_replay,omitempty"`
 	Include           []IncludeType  `json:"include"`
 	Instructions      *string        `json:"instructions"`
 	Logprobs          any            `json:"logprobs"`
