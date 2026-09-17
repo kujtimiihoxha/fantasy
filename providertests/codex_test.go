@@ -3,40 +3,62 @@ package providertests
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/codex"
 	"charm.land/fantasy/providers/openai"
-	"github.com/google/uuid"
+	"charm.land/x/vcr"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
 )
 
-// TestCodexLive is opt-in and never records account credentials or responses.
-func TestCodexLive(t *testing.T) {
+// TestCodexResponses records synthetic prompts and replays without credentials.
+func TestCodexResponses(t *testing.T) {
 	path := os.Getenv("FANTASY_CODEX_TOKEN_FILE")
-	if path == "" {
-		t.Skip("set FANTASY_CODEX_TOKEN_FILE to a JSON file with access_token and account_id")
+	cassettePath := "testdata/" + t.Name() + ".yaml"
+	_, statErr := os.Stat(cassettePath)
+	replay := statErr == nil
+	if statErr != nil && !os.IsNotExist(statErr) {
+		t.Fatal(statErr)
 	}
+	if !replay && path == "" {
+		t.Skip("set FANTASY_CODEX_TOKEN_FILE to record the Codex test")
+	}
+	mode := recorder.ModeRecordOnce
+	if replay {
+		mode = recorder.ModeReplayOnly
+	}
+	recording := vcr.NewRecorder(t, vcr.WithMode(mode))
+	var secrets []string
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 	provider, err := codex.New(codex.Config{
-		SessionID:  uuid.NewString(),
+		SessionID:  "fantasy-codex-provider-test",
+		HTTPClient: &http.Client{Transport: recording},
 		Originator: "fantasy",
 		Credentials: func(context.Context) (codex.Credentials, error) {
+			if replay {
+				return codex.Credentials{AccessToken: "recorded-token", AccountID: "recorded-account"}, nil
+			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return codex.Credentials{}, err
 			}
 			var stored struct {
-				AccessToken string `json:"access_token"`
-				AccountID   string `json:"account_id"`
+				AccessToken  string `json:"access_token"`
+				AccountID    string `json:"account_id"`
+				RefreshToken string `json:"refresh_token"`
+				IDToken      string `json:"id_token"`
 			}
 			if err := json.Unmarshal(data, &stored); err != nil {
 				return codex.Credentials{}, err
 			}
+			secrets = append(secrets, stored.AccessToken, stored.AccountID, stored.RefreshToken, stored.IDToken)
 			return codex.Credentials{AccessToken: stored.AccessToken, AccountID: stored.AccountID}, nil
 		},
 	})
@@ -128,4 +150,15 @@ func TestCodexLive(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `{"value":42}`, string(data))
 	t.Log("GenerateObject and StreamObject passed")
+	require.NoError(t, recording.Stop())
+	recorded, err := os.ReadFile(cassettePath)
+	require.NoError(t, err)
+	for _, secret := range secrets {
+		if secret != "" {
+			require.False(t, strings.Contains(string(recorded), secret), "recording contains an account credential or identifier")
+		}
+	}
+	for _, header := range []string{"authorization:", "chatgpt-account-id:", "cookie:", "set-cookie:"} {
+		require.False(t, strings.Contains(strings.ToLower(string(recorded)), header), "recording contains a private header")
+	}
 }

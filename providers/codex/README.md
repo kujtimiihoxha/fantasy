@@ -48,10 +48,12 @@ blocks redirects. Credentials go only to the configured Responses endpoint.
 describes ChatGPT login and API key login. This package uses ChatGPT credentials.
 Use `providers/openai` for Platform API keys.
 
-Run the opt-in live test with a JSON file that contains `access_token` and
-`account_id`. The test uses `gpt-5.6-luna`. It does not refresh credentials or
-write a recording.
+The provider test replays its cassette without credentials or network access.
+To record it again, remove `providertests/testdata/TestCodexResponses.yaml` and
+supply a JSON file with `access_token` and `account_id`. The test uses
+`gpt-5.6-luna`. It does not refresh credentials. The recorder removes private
+headers, and the test checks that credentials and account IDs are absent.
 
 ```sh
-FANTASY_CODEX_TOKEN_FILE=/path/to/tokens.json go test ./providertests -run '^TestCodexLive$' -count=1
+FANTASY_CODEX_TOKEN_FILE=/path/to/tokens.json go test ./providertests -run '^TestCodexResponses$' -count=1
 ```
