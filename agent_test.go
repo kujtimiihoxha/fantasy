@@ -2973,3 +2973,37 @@ func TestAgent_NoRepairOnAbnormalFinish_NonStreaming(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentStreamLifecycleErrors(t *testing.T) {
+	t.Parallel()
+	failure := errors.New("storage unavailable")
+	for _, hook := range []string{"start", "step", "agent"} {
+		t.Run(hook, func(t *testing.T) {
+			t.Parallel()
+			requests := 0
+			model := &mockLanguageModel{streamFunc: func(context.Context, Call) (StreamResponse, error) {
+				requests++
+				return func(yield func(StreamPart) bool) {
+					yield(StreamPart{Type: StreamPartTypeFinish, FinishReason: FinishReasonStop})
+				}, nil
+			}}
+			call := AgentStreamCall{Prompt: "test"}
+			switch hook {
+			case "start":
+				call.OnStepStart = func(int) error { return failure }
+			case "step":
+				call.OnStepFinish = func(StepResult) error { return failure }
+			case "agent":
+				call.OnAgentFinish = func(*AgentResult) error { return failure }
+			}
+			result, err := NewAgent(model).Stream(context.Background(), call)
+			require.ErrorIs(t, err, failure)
+			require.Nil(t, result)
+			if hook == "start" {
+				require.Zero(t, requests)
+			} else {
+				require.Equal(t, 1, requests)
+			}
+		})
+	}
+}

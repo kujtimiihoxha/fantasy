@@ -1012,7 +1012,9 @@ func (a *agent) Stream(ctx context.Context, opts AgentStreamCall) (*AgentResult,
 
 		// Start step stream
 		if opts.OnStepStart != nil {
-			_ = opts.OnStepStart(stepNumber)
+			if err := opts.OnStepStart(stepNumber); err != nil {
+				return nil, err
+			}
 		}
 		// Create streaming call
 		streamCall := Call{
@@ -1072,7 +1074,9 @@ func (a *agent) Stream(ctx context.Context, opts AgentStreamCall) (*AgentResult,
 
 		// Call step finished callback
 		if opts.OnStepFinish != nil {
-			_ = opts.OnStepFinish(result.StepResult)
+			if err := opts.OnStepFinish(result.StepResult); err != nil {
+				return nil, err
+			}
 		}
 
 		// Add step messages to response messages
@@ -1098,7 +1102,9 @@ func (a *agent) Stream(ctx context.Context, opts AgentStreamCall) (*AgentResult,
 	}
 
 	if opts.OnAgentFinish != nil {
-		_ = opts.OnAgentFinish(agentResult)
+		if err := opts.OnAgentFinish(agentResult); err != nil {
+			return nil, err
+		}
 	}
 
 	return agentResult, nil
@@ -1679,39 +1685,6 @@ func (a *agent) processStepStream(ctx context.Context, stream StreamResponse, op
 	parallelSem := make(chan struct{}, 5)
 	var sequentialMu sync.Mutex
 
-	// Single coordinator goroutine that dispatches tools.
-	toolExecutionWg.Go(func() {
-		for req := range toolChan {
-			if req.parallel {
-				parallelSem <- struct{}{}
-				toolExecutionWg.Go(func() {
-					defer func() { <-parallelSem }()
-					result, isCriticalError := a.executeSingleTool(ctx, toolMap, execProviderToolMap, req.toolCall, opts.OnToolResult)
-					toolStateMu.Lock()
-					toolResults = append(toolResults, result)
-					if isCriticalError && toolExecutionErr == nil {
-						if errorResult, ok := result.Result.(ToolResultOutputContentError); ok && errorResult.Error != nil {
-							toolExecutionErr = errorResult.Error
-						}
-					}
-					toolStateMu.Unlock()
-				})
-			} else {
-				sequentialMu.Lock()
-				result, isCriticalError := a.executeSingleTool(ctx, toolMap, execProviderToolMap, req.toolCall, opts.OnToolResult)
-				toolStateMu.Lock()
-				toolResults = append(toolResults, result)
-				if isCriticalError && toolExecutionErr == nil {
-					if errorResult, ok := result.Result.(ToolResultOutputContentError); ok && errorResult.Error != nil {
-						toolExecutionErr = errorResult.Error
-					}
-				}
-				toolStateMu.Unlock()
-				sequentialMu.Unlock()
-			}
-		}
-	})
-
 	// Process buffered tool calls now that the finish reason is known.
 	// Abnormal finishes — length, content filter, provider error, unknown —
 	// can accompany arguments that were cut short: record the raw call in
@@ -1777,6 +1750,39 @@ func (a *agent) processStepStream(ctx context.Context, stream StreamResponse, op
 		// OnToolCall callbacks complete before any tool result is written.
 		pendingDispatches = append(pendingDispatches, toolExecutionRequest{toolCall: validatedToolCall, parallel: isParallel})
 	}
+
+	// Single coordinator goroutine that dispatches tools.
+	toolExecutionWg.Go(func() {
+		for req := range toolChan {
+			if req.parallel {
+				parallelSem <- struct{}{}
+				toolExecutionWg.Go(func() {
+					defer func() { <-parallelSem }()
+					result, isCriticalError := a.executeSingleTool(ctx, toolMap, execProviderToolMap, req.toolCall, opts.OnToolResult)
+					toolStateMu.Lock()
+					toolResults = append(toolResults, result)
+					if isCriticalError && toolExecutionErr == nil {
+						if errorResult, ok := result.Result.(ToolResultOutputContentError); ok && errorResult.Error != nil {
+							toolExecutionErr = errorResult.Error
+						}
+					}
+					toolStateMu.Unlock()
+				})
+			} else {
+				sequentialMu.Lock()
+				result, isCriticalError := a.executeSingleTool(ctx, toolMap, execProviderToolMap, req.toolCall, opts.OnToolResult)
+				toolStateMu.Lock()
+				toolResults = append(toolResults, result)
+				if isCriticalError && toolExecutionErr == nil {
+					if errorResult, ok := result.Result.(ToolResultOutputContentError); ok && errorResult.Error != nil {
+						toolExecutionErr = errorResult.Error
+					}
+				}
+				toolStateMu.Unlock()
+				sequentialMu.Unlock()
+			}
+		}
+	})
 
 	// Dispatch all buffered tool calls now that every OnToolCall callback has
 	// been called, then close and wait. Dispatch only on an explicit
