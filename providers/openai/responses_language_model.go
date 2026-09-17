@@ -1127,8 +1127,6 @@ func (o responsesLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 		return nil, err
 	}
 
-	stream := o.client.Responses.NewStreaming(ctx, *params, capture.requestOptions(o.headerFunc, append(callUARequestOptions(call), callHeadersRequestOptions(call)...))...)
-
 	finishReason := fantasy.FinishReasonUnknown
 	var usage fantasy.Usage
 	// responseID tracks the server-assigned response ID. It's first set from the
@@ -1144,6 +1142,8 @@ func (o responsesLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 	activeText := make(map[string]bool)
 
 	return func(yield func(fantasy.StreamPart) bool) {
+		stream := o.client.Responses.NewStreaming(ctx, *params, capture.requestOptions(o.headerFunc, append(callUARequestOptions(call), callHeadersRequestOptions(call)...))...)
+		defer func() { _ = stream.Close() }()
 		if len(warnings) > 0 {
 			if !yield(fantasy.StreamPart{
 				Type:     fantasy.StreamPartTypeWarnings,
@@ -1480,6 +1480,9 @@ func (o responsesLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 				}
 				return
 			}
+			if sawTerminalEvent {
+				break
+			}
 		}
 
 		err := stream.Err()
@@ -1784,9 +1787,9 @@ func (o responsesLanguageModel) streamObjectWithJSONMode(ctx context.Context, ca
 	}
 
 	capture := responseCapture{}
-	stream := o.client.Responses.NewStreaming(ctx, *params, capture.requestOptions(o.headerFunc, append(objectCallUARequestOptions(call), objectCallHeadersRequestOptions(call)...))...)
-
 	return func(yield func(fantasy.ObjectStreamPart) bool) {
+		stream := o.client.Responses.NewStreaming(ctx, *params, capture.requestOptions(o.headerFunc, append(objectCallUARequestOptions(call), objectCallHeadersRequestOptions(call)...))...)
+		defer func() { _ = stream.Close() }()
 		if len(warnings) > 0 {
 			if !yield(fantasy.ObjectStreamPart{
 				Type:     fantasy.ObjectStreamPartTypeObject,
@@ -1893,6 +1896,9 @@ func (o responsesLanguageModel) streamObjectWithJSONMode(ctx context.Context, ca
 					return
 				}
 				return
+			}
+			if sawTerminalEvent {
+				break
 			}
 		}
 

@@ -64,6 +64,8 @@ fmt.Println(result.Response.Content.Text())
 
 Yeah! Fantasy is designed to support a wide variety of providers and models under a single API. While many providers such as Microsoft Azure, Amazon Bedrock, and OpenRouter have dedicated packages in Fantasy, many others work just fine with `openaicompat`, the generic OpenAI-compatible layer. That said, if you find a provider that’s not compatible and needs special treatment, please let us know in an issue (or open a PR).
 
+For ChatGPT Codex access, use the [Codex provider](providers/codex/README.md).
+
 ## Work in Progress
 
 We built Fantasy to power [Crush](https://github.com/charmbracelet/crush), a hot coding agent for glamourously invincible development. Given that, Fantasy does not yet support things like:
