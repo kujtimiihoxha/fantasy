@@ -1645,6 +1645,25 @@ func (o responsesLanguageModel) StreamObject(ctx context.Context, call fantasy.O
 	}
 }
 
+// responsesObjectText rejects the whole output if any message part is a refusal.
+func responsesObjectText(response responses.Response) (string, bool) {
+	var text strings.Builder
+	for _, item := range response.Output {
+		if item.Type != "message" {
+			continue
+		}
+		for _, part := range item.Content {
+			if part.Type == "refusal" {
+				return "", true
+			}
+			if part.Type == "output_text" {
+				text.WriteString(part.Text)
+			}
+		}
+	}
+	return text.String(), false
+}
+
 func (o responsesLanguageModel) generateObjectWithJSONMode(ctx context.Context, call fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
 	// Convert our Schema to OpenAI's JSON Schema format
 	jsonSchemaMap := schema.ToMap(call.Schema)
@@ -1677,6 +1696,9 @@ func (o responsesLanguageModel) generateObjectWithJSONMode(ctx context.Context, 
 	params.Text = responses.ResponseTextConfigParam{
 		Format: responses.ResponseFormatTextConfigParamOfJSONSchema(schemaName, jsonSchemaMap),
 	}
+	if opts, ok := call.ProviderOptions[Name].(*ResponsesProviderOptions); ok && opts != nil && opts.StrictJSONSchema != nil {
+		params.Text.Format.OfJSONSchema.Strict = param.NewOpt(*opts.StrictJSONSchema)
+	}
 
 	// Make request
 	capture := responseCapture{}
@@ -1692,31 +1714,18 @@ func (o responsesLanguageModel) generateObjectWithJSONMode(ctx context.Context, 
 		}
 	}
 
-	// Extract JSON text from response
-	var jsonText string
-	for _, outputItem := range response.Output {
-		if outputItem.Type == "message" {
-			for _, contentPart := range outputItem.Content {
-				if contentPart.Type == "output_text" {
-					jsonText = contentPart.Text
-					break
-				}
-			}
+	usage := responsesUsage(*response)
+	finishReason := mapResponsesFinishReason(response.IncompleteDetails.Reason, false)
+	jsonText, refused := responsesObjectText(*response)
+	if refused {
+		return nil, &fantasy.NoObjectGeneratedError{
+			ParseError: fmt.Errorf("model refused the request"), Usage: usage,
+			FinishReason: fantasy.FinishReasonContentFilter,
 		}
 	}
-
 	if jsonText == "" {
-		usage := fantasy.Usage{
-			InputTokens:  response.Usage.InputTokens,
-			OutputTokens: response.Usage.OutputTokens,
-			TotalTokens:  response.Usage.InputTokens + response.Usage.OutputTokens,
-		}
-		finishReason := mapResponsesFinishReason(response.IncompleteDetails.Reason, false)
 		return nil, &fantasy.NoObjectGeneratedError{
-			RawText:      "",
-			ParseError:   fmt.Errorf("no text content in response"),
-			Usage:        usage,
-			FinishReason: finishReason,
+			ParseError: fmt.Errorf("no text content in response"), Usage: usage, FinishReason: finishReason,
 		}
 	}
 
@@ -1728,16 +1737,10 @@ func (o responsesLanguageModel) generateObjectWithJSONMode(ctx context.Context, 
 		obj, err = schema.ParseAndValidate(jsonText, call.Schema)
 	}
 
-	usage := responsesUsage(*response)
-	finishReason := mapResponsesFinishReason(response.IncompleteDetails.Reason, false)
-
 	if err != nil {
-		// Add usage info to error
-		if nogErr, ok := err.(*fantasy.NoObjectGeneratedError); ok {
-			nogErr.Usage = usage
-			nogErr.FinishReason = finishReason
+		return nil, &fantasy.NoObjectGeneratedError{
+			RawText: jsonText, ParseError: err, Usage: usage, FinishReason: finishReason,
 		}
-		return nil, err
 	}
 
 	metadata := responsesProviderMetadata(response.ID)
@@ -1785,6 +1788,9 @@ func (o responsesLanguageModel) streamObjectWithJSONMode(ctx context.Context, ca
 	params.Text = responses.ResponseTextConfigParam{
 		Format: responses.ResponseFormatTextConfigParamOfJSONSchema(schemaName, jsonSchemaMap),
 	}
+	if opts, ok := call.ProviderOptions[Name].(*ResponsesProviderOptions); ok && opts != nil && opts.StrictJSONSchema != nil {
+		params.Text.Format.OfJSONSchema.Strict = param.NewOpt(*opts.StrictJSONSchema)
+	}
 
 	capture := responseCapture{}
 	return func(yield func(fantasy.ObjectStreamPart) bool) {
@@ -1809,13 +1815,15 @@ func (o responsesLanguageModel) streamObjectWithJSONMode(ctx context.Context, ca
 		// identical; the overwrites ensure we have the final value even if an event
 		// is missed.
 		var responseID string
-		var sawTerminalEvent bool
+		var sawTerminalEvent, refused bool
 		hasFunctionCall := false
 
 		for stream.Next() {
 			event := stream.Current()
 
 			switch event.Type {
+			case "response.refusal.delta", "response.refusal.done":
+				refused = true
 			case "response.created":
 				created := event.AsResponseCreated()
 				responseID = created.Response.ID
@@ -1869,6 +1877,8 @@ func (o responsesLanguageModel) streamObjectWithJSONMode(ctx context.Context, ca
 				responseID = completed.Response.ID
 				finishReason = mapResponsesFinishReason(completed.Response.IncompleteDetails.Reason, hasFunctionCall)
 				usage = responsesUsage(completed.Response)
+				_, terminalRefused := responsesObjectText(completed.Response)
+				refused = refused || terminalRefused
 
 			case "response.incomplete":
 				sawTerminalEvent = true
@@ -1876,6 +1886,8 @@ func (o responsesLanguageModel) streamObjectWithJSONMode(ctx context.Context, ca
 				responseID = incomplete.Response.ID
 				finishReason = mapResponsesFinishReason(incomplete.Response.IncompleteDetails.Reason, hasFunctionCall)
 				usage = responsesUsage(incomplete.Response)
+				_, terminalRefused := responsesObjectText(incomplete.Response)
+				refused = refused || terminalRefused
 
 			case "response.failed":
 				failed := event.AsResponseFailed()
@@ -1919,6 +1931,17 @@ func (o responsesLanguageModel) streamObjectWithJSONMode(ctx context.Context, ca
 			yield(fantasy.ObjectStreamPart{
 				Type:  fantasy.ObjectStreamPartTypeError,
 				Error: err,
+			})
+			return
+		}
+
+		if refused {
+			yield(fantasy.ObjectStreamPart{
+				Type: fantasy.ObjectStreamPartTypeError,
+				Error: &fantasy.NoObjectGeneratedError{
+					ParseError: fmt.Errorf("model refused the request"),
+					Usage:      usage, FinishReason: fantasy.FinishReasonContentFilter,
+				},
 			})
 			return
 		}

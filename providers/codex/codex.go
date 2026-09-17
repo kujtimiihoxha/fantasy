@@ -145,11 +145,20 @@ func (m *model) Compact(ctx context.Context, call fantasy.Call) (*fantasy.Respon
 }
 
 func (m *model) GenerateObject(ctx context.Context, call fantasy.ObjectCall) (*fantasy.ObjectResponse, error) {
-	call.ProviderOptions = m.options(call.ProviderOptions)
+	call.ProviderOptions = m.objectOptions(call.ProviderOptions)
 	return m.LanguageModel.GenerateObject(ctx, call)
 }
 
 func (m *model) StreamObject(ctx context.Context, call fantasy.ObjectCall) (fantasy.ObjectStreamResponse, error) {
-	call.ProviderOptions = m.options(call.ProviderOptions)
+	call.ProviderOptions = m.objectOptions(call.ProviderOptions)
 	return m.LanguageModel.StreamObject(ctx, call)
+}
+
+func (m *model) objectOptions(input fantasy.ProviderOptions) fantasy.ProviderOptions {
+	result := m.options(input)
+	opts := result[openai.Name].(*openai.ResponsesProviderOptions)
+	if opts.StrictJSONSchema == nil {
+		opts.StrictJSONSchema = new(true)
+	}
+	return result
 }
