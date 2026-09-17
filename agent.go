@@ -701,6 +701,12 @@ func toResponseMessages(content []Content) []Message {
 				Text:            reasoning.Text,
 				ProviderOptions: ProviderOptions(reasoning.ProviderMetadata),
 			})
+		case ContentTypeCompaction:
+			checkpoint, ok := AsContentType[CompactionContent](c)
+			if !ok {
+				continue
+			}
+			assistantParts = append(assistantParts, CompactionPart{ProviderOptions: ProviderOptions(checkpoint.ProviderMetadata)})
 		case ContentTypeToolCall:
 			toolCall, ok := AsContentType[ToolCallContent](c)
 			if !ok {
@@ -1627,6 +1633,8 @@ func (a *agent) processStepStream(ctx context.Context, stream StreamResponse, op
 				}
 			}
 
+		case StreamPartTypeCompaction:
+			stepContent = append(stepContent, CompactionContent{ProviderMetadata: part.ProviderMetadata})
 		case StreamPartTypeSource:
 			sourceContent := SourceContent{
 				SourceType:       part.SourceType,

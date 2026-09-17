@@ -160,6 +160,8 @@ const (
 	StreamPartTypeToolResult StreamPartType = "tool_result"
 	// StreamPartTypeSource represents source stream part type.
 	StreamPartTypeSource StreamPartType = "source"
+	// StreamPartTypeCompaction carries a complete provider checkpoint.
+	StreamPartTypeCompaction StreamPartType = "compaction"
 	// StreamPartTypeFinish represents finish stream part type.
 	StreamPartTypeFinish StreamPartType = "finish"
 	// StreamPartTypeError represents error stream part type.

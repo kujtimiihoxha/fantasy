@@ -610,6 +610,17 @@ func toResponsesPrompt(prompt fantasy.Prompt, systemMessageMode string, store, f
 					// Source citations from web search are not a
 					// recognised Responses API input type; skip.
 					continue
+				case fantasy.ContentTypeCompaction:
+					metadata, ok := c.Options()[Name].(*ResponsesCompactionMetadata)
+					if !ok || metadata == nil || metadata.EncryptedContent == "" {
+						warnings = append(warnings, fantasy.CallWarning{Type: fantasy.CallWarningTypeOther, Message: "compaction replay requires OpenAI metadata with encrypted content"})
+						continue
+					}
+					item := responses.ResponseInputItemParamOfCompaction(metadata.EncryptedContent)
+					if metadata.ItemID != "" {
+						item.OfCompaction.ID = param.NewOpt(metadata.ItemID)
+					}
+					input = append(input, item)
 				case fantasy.ContentTypeReasoning:
 					if !fullReplay {
 						continue
@@ -765,7 +776,7 @@ func hasVisibleResponsesUserContent(content responses.ResponseInputMessageConten
 func hasVisibleResponsesAssistantContent(items []responses.ResponseInputItemUnionParam, startIdx int) bool {
 	// Check if we added any assistant content parts from this message
 	for i := startIdx; i < len(items); i++ {
-		if items[i].OfMessage != nil || items[i].OfOutputMessage != nil || items[i].OfReasoning != nil || items[i].OfFunctionCall != nil || items[i].OfItemReference != nil {
+		if items[i].OfMessage != nil || items[i].OfOutputMessage != nil || items[i].OfReasoning != nil || items[i].OfFunctionCall != nil || items[i].OfItemReference != nil || items[i].OfCompaction != nil {
 			return true
 		}
 	}
@@ -934,6 +945,8 @@ func (o responsesLanguageModel) Generate(ctx context.Context, call fantasy.Call)
 
 	for _, outputItem := range response.Output {
 		switch outputItem.Type {
+		case "compaction":
+			content = append(content, fantasy.CompactionContent{ProviderMetadata: responsesCompactionMetadata(outputItem)})
 		case "message":
 			for _, contentPart := range outputItem.Content {
 				if contentPart.Type == "output_text" || (fullReplay && contentPart.Type == "refusal") {
@@ -1212,6 +1225,10 @@ func (o responsesLanguageModel) Stream(ctx context.Context, call fantasy.Call) (
 			case "response.output_item.done":
 				done := event.AsResponseOutputItemDone()
 				switch done.Item.Type {
+				case "compaction":
+					if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeCompaction, ID: done.Item.ID, ProviderMetadata: responsesCompactionMetadata(done.Item)}) {
+						return
+					}
 				case "function_call":
 					tc := ongoingToolCalls[done.OutputIndex]
 					if tc != nil {
@@ -1923,4 +1940,8 @@ func (o responsesLanguageModel) streamObjectWithJSONMode(ctx context.Context, ca
 			})
 		}
 	}, nil
+}
+
+func responsesCompactionMetadata(item responses.ResponseOutputItemUnion) fantasy.ProviderMetadata {
+	return fantasy.ProviderMetadata{Name: &ResponsesCompactionMetadata{ItemID: item.ID, EncryptedContent: item.EncryptedContent}}
 }

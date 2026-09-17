@@ -12,12 +12,13 @@ import (
 
 // Global type identifiers for OpenAI Responses API-specific data.
 const (
-	TypeResponsesProviderMetadata  = Name + ".responses.metadata"
-	TypeResponsesProviderOptions   = Name + ".responses.options"
-	TypeResponsesReasoningMetadata = Name + ".responses.reasoning_metadata"
-	TypeResponsesMessageMetadata   = Name + ".responses.message_metadata"
-	TypeResponsesToolCallMetadata  = Name + ".responses.tool_call_metadata"
-	TypeWebSearchCallMetadata      = Name + ".responses.web_search_call_metadata"
+	TypeResponsesProviderMetadata   = Name + ".responses.metadata"
+	TypeResponsesProviderOptions    = Name + ".responses.options"
+	TypeResponsesReasoningMetadata  = Name + ".responses.reasoning_metadata"
+	TypeResponsesMessageMetadata    = Name + ".responses.message_metadata"
+	TypeResponsesCompactionMetadata = Name + ".responses.compaction_metadata"
+	TypeResponsesToolCallMetadata   = Name + ".responses.tool_call_metadata"
+	TypeWebSearchCallMetadata       = Name + ".responses.web_search_call_metadata"
 )
 
 // Register OpenAI Responses API-specific types with the global registry.
@@ -31,6 +32,13 @@ func init() {
 	})
 	fantasy.RegisterProviderType(TypeResponsesToolCallMetadata, func(data []byte) (fantasy.ProviderOptionsData, error) {
 		var v ResponsesToolCallMetadata
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, err
+		}
+		return &v, nil
+	})
+	fantasy.RegisterProviderType(TypeResponsesCompactionMetadata, func(data []byte) (fantasy.ProviderOptionsData, error) {
+		var v ResponsesCompactionMetadata
 		if err := json.Unmarshal(data, &v); err != nil {
 			return nil, err
 		}
@@ -158,6 +166,27 @@ func (m ResponsesToolCallMetadata) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON restores metadata from stored history.
 func (m *ResponsesToolCallMetadata) UnmarshalJSON(data []byte) error {
 	type plain ResponsesToolCallMetadata
+	return fantasy.UnmarshalProviderType(data, (*plain)(m))
+}
+
+// ResponsesCompactionMetadata preserves the checkpoint for stateless replay.
+type ResponsesCompactionMetadata struct {
+	ItemID           string `json:"item_id,omitempty"`
+	EncryptedContent string `json:"encrypted_content"`
+}
+
+// Options implements the ProviderOptionsData interface.
+func (*ResponsesCompactionMetadata) Options() {}
+
+// MarshalJSON includes the provider type for stored history.
+func (m ResponsesCompactionMetadata) MarshalJSON() ([]byte, error) {
+	type plain ResponsesCompactionMetadata
+	return fantasy.MarshalProviderType(TypeResponsesCompactionMetadata, plain(m))
+}
+
+// UnmarshalJSON restores metadata from stored history.
+func (m *ResponsesCompactionMetadata) UnmarshalJSON(data []byte) error {
+	type plain ResponsesCompactionMetadata
 	return fantasy.UnmarshalProviderType(data, (*plain)(m))
 }
 

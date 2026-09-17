@@ -15,6 +15,7 @@ import (
 	"charm.land/fantasy/object"
 	"charm.land/fantasy/providers/anthropic"
 	"charm.land/fantasy/providers/internal/httpheaders"
+	promptutil "charm.land/fantasy/providers/internal/prompt"
 	"charm.land/fantasy/schema"
 	"cloud.google.com/go/auth"
 	"github.com/charmbracelet/x/exp/slice"
@@ -348,10 +349,10 @@ func (g languageModel) prepareParams(call fantasy.Call) (*genai.GenerateContentC
 	return config, content, warnings, nil
 }
 
-func toGooglePrompt(prompt fantasy.Prompt, isVertexAI bool) (*genai.Content, []*genai.Content, []fantasy.CallWarning) { //nolint: unparam
+func toGooglePrompt(prompt fantasy.Prompt, isVertexAI bool) (*genai.Content, []*genai.Content, []fantasy.CallWarning) {
 	var systemInstructions *genai.Content
 	var content []*genai.Content
-	var warnings []fantasy.CallWarning
+	prompt, warnings := promptutil.SkipCompaction(prompt)
 
 	finishedSystemBlock := false
 	for _, msg := range prompt {

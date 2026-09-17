@@ -18,6 +18,7 @@ import (
 	"charm.land/fantasy"
 	"charm.land/fantasy/object"
 	"charm.land/fantasy/providers/internal/httpheaders"
+	promptutil "charm.land/fantasy/providers/internal/prompt"
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/bedrock"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -895,7 +896,7 @@ func (a languageModel) toTools(tools []fantasy.Tool, toolChoice *fantasy.ToolCho
 func toPrompt(prompt fantasy.Prompt, sendReasoningData bool) ([]anthropic.TextBlockParam, []anthropic.MessageParam, []fantasy.CallWarning) {
 	var systemBlocks []anthropic.TextBlockParam
 	var messages []anthropic.MessageParam
-	var warnings []fantasy.CallWarning
+	prompt, warnings := promptutil.SkipCompaction(prompt)
 
 	blocks := groupIntoBlocks(prompt)
 	finishedSystemBlock := false

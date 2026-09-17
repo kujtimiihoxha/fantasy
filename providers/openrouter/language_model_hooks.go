@@ -10,6 +10,7 @@ import (
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/anthropic"
 	"charm.land/fantasy/providers/google"
+	promptutil "charm.land/fantasy/providers/internal/prompt"
 	"charm.land/fantasy/providers/openai"
 	xstrings "github.com/charmbracelet/x/exp/strings"
 	openaisdk "github.com/openai/openai-go/v3"
@@ -512,7 +513,7 @@ func languageModelStreamUsage(chunk openaisdk.ChatCompletionChunk, _ map[string]
 
 func languageModelToPrompt(prompt fantasy.Prompt, _, model string) ([]openaisdk.ChatCompletionMessageParamUnion, []fantasy.CallWarning) {
 	var messages []openaisdk.ChatCompletionMessageParamUnion
-	var warnings []fantasy.CallWarning
+	prompt, warnings := promptutil.SkipCompaction(prompt)
 	for _, msg := range prompt {
 		switch msg.Role {
 		case fantasy.MessageRoleSystem:

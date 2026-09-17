@@ -126,6 +126,49 @@ func (r *ReasoningContent) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalJSON implements json.Marshaler for CompactionContent.
+func (r CompactionContent) MarshalJSON() ([]byte, error) {
+	dataBytes, err := json.Marshal(struct {
+		ProviderMetadata ProviderMetadata `json:"provider_metadata,omitempty"`
+	}{
+		ProviderMetadata: r.ProviderMetadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return json.Marshal(contentJSON{
+		Type: string(ContentTypeCompaction),
+		Data: json.RawMessage(dataBytes),
+	})
+}
+
+// UnmarshalJSON implements json.Unmarshaler for CompactionContent.
+func (r *CompactionContent) UnmarshalJSON(data []byte) error {
+	var cj contentJSON
+	if err := json.Unmarshal(data, &cj); err != nil {
+		return err
+	}
+
+	var aux struct {
+		ProviderMetadata map[string]json.RawMessage `json:"provider_metadata,omitempty"`
+	}
+
+	if err := json.Unmarshal(cj.Data, &aux); err != nil {
+		return err
+	}
+
+	if len(aux.ProviderMetadata) > 0 {
+		metadata, err := UnmarshalProviderMetadata(aux.ProviderMetadata)
+		if err != nil {
+			return err
+		}
+		r.ProviderMetadata = metadata
+	}
+
+	return nil
+}
+
 // MarshalJSON implements json.Marshaler for FileContent.
 func (f FileContent) MarshalJSON() ([]byte, error) {
 	dataBytes, err := json.Marshal(struct {
@@ -592,6 +635,49 @@ func (r *ReasoningPart) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalJSON implements json.Marshaler for CompactionPart.
+func (r CompactionPart) MarshalJSON() ([]byte, error) {
+	dataBytes, err := json.Marshal(struct {
+		ProviderOptions ProviderOptions `json:"provider_options,omitempty"`
+	}{
+		ProviderOptions: r.ProviderOptions,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return json.Marshal(messagePartJSON{
+		Type: string(ContentTypeCompaction),
+		Data: json.RawMessage(dataBytes),
+	})
+}
+
+// UnmarshalJSON implements json.Unmarshaler for CompactionPart.
+func (r *CompactionPart) UnmarshalJSON(data []byte) error {
+	var mpj messagePartJSON
+	if err := json.Unmarshal(data, &mpj); err != nil {
+		return err
+	}
+
+	var aux struct {
+		ProviderOptions map[string]json.RawMessage `json:"provider_options,omitempty"`
+	}
+
+	if err := json.Unmarshal(mpj.Data, &aux); err != nil {
+		return err
+	}
+
+	if len(aux.ProviderOptions) > 0 {
+		options, err := UnmarshalProviderOptions(aux.ProviderOptions)
+		if err != nil {
+			return err
+		}
+		r.ProviderOptions = options
+	}
+
+	return nil
+}
+
 // MarshalJSON implements json.Marshaler for FilePart.
 func (f FilePart) MarshalJSON() ([]byte, error) {
 	dataBytes, err := json.Marshal(struct {
@@ -942,6 +1028,12 @@ func UnmarshalContent(data []byte) (Content, error) {
 			return nil, err
 		}
 		return content, nil
+	case ContentTypeCompaction:
+		var content CompactionContent
+		if err := content.UnmarshalJSON(data); err != nil {
+			return nil, err
+		}
+		return content, nil
 	case ContentTypeFile:
 		var content FileContent
 		if err := content.UnmarshalJSON(data); err != nil {
@@ -987,6 +1079,12 @@ func UnmarshalMessagePart(data []byte) (MessagePart, error) {
 		return part, nil
 	case ContentTypeReasoning:
 		var part ReasoningPart
+		if err := part.UnmarshalJSON(data); err != nil {
+			return nil, err
+		}
+		return part, nil
+	case ContentTypeCompaction:
+		var part CompactionPart
 		if err := part.UnmarshalJSON(data); err != nil {
 			return nil, err
 		}

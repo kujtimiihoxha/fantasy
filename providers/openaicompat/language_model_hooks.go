@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
+	promptutil "charm.land/fantasy/providers/internal/prompt"
 	"charm.land/fantasy/providers/openai"
 	openaisdk "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/packages/param"
@@ -188,7 +189,7 @@ func StreamExtraFunc(chunk openaisdk.ChatCompletionChunk, yield func(fantasy.Str
 // reasoning_content field to the message JSON.
 func ToPromptFunc(prompt fantasy.Prompt, _, _ string) ([]openaisdk.ChatCompletionMessageParamUnion, []fantasy.CallWarning) {
 	var messages []openaisdk.ChatCompletionMessageParamUnion
-	var warnings []fantasy.CallWarning
+	prompt, warnings := promptutil.SkipCompaction(prompt)
 	// Defer synthetic user messages holding tool-result media (see
 	// openai.ToolResultMediaMessages) until the contiguous run of tool
 	// messages ends: strict chat-completions validators require every

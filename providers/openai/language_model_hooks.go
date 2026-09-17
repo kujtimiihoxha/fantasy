@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
+	promptutil "charm.land/fantasy/providers/internal/prompt"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/shared"
@@ -304,7 +305,7 @@ func DefaultStreamProviderMetadataFunc(choice openai.ChatCompletionChoice, metad
 // DefaultToPrompt converts a fantasy prompt to OpenAI format with default handling.
 func DefaultToPrompt(prompt fantasy.Prompt, _, _ string) ([]openai.ChatCompletionMessageParamUnion, []fantasy.CallWarning) {
 	var messages []openai.ChatCompletionMessageParamUnion
-	var warnings []fantasy.CallWarning
+	prompt, warnings := promptutil.SkipCompaction(prompt)
 	// Defer synthetic user messages holding tool-result media (see
 	// ToolResultMediaMessages) until the contiguous run of tool messages
 	// ends: strict chat-completions validators require every tool message

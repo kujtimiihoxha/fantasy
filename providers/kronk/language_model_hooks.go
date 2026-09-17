@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
+	promptutil "charm.land/fantasy/providers/internal/prompt"
 	"github.com/ardanlabs/kronk/sdk/kronk/model"
 )
 
@@ -143,7 +144,7 @@ func DefaultMapFinishReasonFunc(finishReason string) fantasy.FinishReason {
 // DefaultToPrompt is the default implementation for converting fantasy prompts to Kronk SDK messages.
 func DefaultToPrompt(prompt fantasy.Prompt, _ string, _ string) ([]model.D, []fantasy.CallWarning) {
 	var messages []model.D
-	var warnings []fantasy.CallWarning
+	prompt, warnings := promptutil.SkipCompaction(prompt)
 
 	for _, msg := range prompt {
 		switch msg.Role {
