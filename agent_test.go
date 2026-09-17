@@ -3007,3 +3007,36 @@ func TestAgentStreamLifecycleErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestToolResultCallbackFailureIsCritical(t *testing.T) {
+	t.Parallel()
+	failure := errors.New("result write failed")
+	toolFailure := errors.New("tool failed")
+	for _, name := range []string{"success", "invalid", "missing", "error"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			tools := map[string]AgentTool{"test": &mockTool{name: "test", executeFunc: func(context.Context, ToolCall) (ToolResponse, error) {
+				if name == "error" {
+					return ToolResponse{}, toolFailure
+				}
+				return NewTextResponse("done"), nil
+			}}}
+			call := ToolCallContent{ToolCallID: "call", ToolName: "test"}
+			if name == "invalid" {
+				call.Invalid = true
+				call.ValidationError = toolFailure
+			}
+			if name == "missing" {
+				call.ToolName = "absent"
+			}
+			result, critical := (&agent{}).executeSingleTool(context.Background(), tools, nil, call, func(ToolResultContent) error { return failure })
+			require.True(t, critical)
+			output, ok := result.Result.(ToolResultOutputContentError)
+			require.True(t, ok)
+			require.ErrorIs(t, output.Error, failure)
+			if name == "error" || name == "invalid" {
+				require.ErrorIs(t, output.Error, toolFailure)
+			}
+		})
+	}
+}

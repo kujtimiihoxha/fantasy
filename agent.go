@@ -817,10 +817,7 @@ func (a *agent) executeSingleTool(ctx context.Context, toolMap map[string]AgentT
 		result.Result = ToolResultOutputContentError{
 			Error: toolCall.ValidationError,
 		}
-		if toolResultCallback != nil {
-			_ = toolResultCallback(result)
-		}
-		return result, false
+		return finishToolResult(result, false, toolResultCallback)
 	}
 
 	// Find the run function — either from a regular AgentTool or an
@@ -835,10 +832,7 @@ func (a *agent) executeSingleTool(ctx context.Context, toolMap map[string]AgentT
 		result.Result = ToolResultOutputContentError{
 			Error: errors.New("tool not found: " + toolCall.ToolName),
 		}
-		if toolResultCallback != nil {
-			_ = toolResultCallback(result)
-		}
-		return result, false
+		return finishToolResult(result, false, toolResultCallback)
 	}
 
 	// Execute the tool, converting a panic into a failed tool result so a
@@ -856,10 +850,7 @@ func (a *agent) executeSingleTool(ctx context.Context, toolMap map[string]AgentT
 		}
 		result.ClientMetadata = toolResult.Metadata
 		result.StopTurn = toolResult.StopTurn
-		if toolResultCallback != nil {
-			_ = toolResultCallback(result)
-		}
-		return result, true
+		return finishToolResult(result, true, toolResultCallback)
 	}
 
 	result.ClientMetadata = toolResult.Metadata
@@ -879,10 +870,21 @@ func (a *agent) executeSingleTool(ctx context.Context, toolMap map[string]AgentT
 			Text: toolResult.Content,
 		}
 	}
-	if toolResultCallback != nil {
-		_ = toolResultCallback(result)
+	return finishToolResult(result, false, toolResultCallback)
+}
+
+// A failed result callback must stop the loop before another model request.
+func finishToolResult(result ToolResultContent, critical bool, callback func(ToolResultContent) error) (ToolResultContent, bool) {
+	if callback != nil {
+		if err := callback(result); err != nil {
+			if original, ok := result.Result.(ToolResultOutputContentError); ok {
+				err = errors.Join(original.Error, err)
+			}
+			result.Result = ToolResultOutputContentError{Error: err}
+			return result, true
+		}
 	}
-	return result, false
+	return result, critical
 }
 
 // runToolSafely invokes a tool's run function and converts any panic into a
