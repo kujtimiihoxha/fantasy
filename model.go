@@ -269,3 +269,10 @@ type LanguageModel interface {
 	Provider() string
 	Model() string
 }
+
+// Compactor is an optional model capability for provider-native checkpoints.
+// A successful response contains one CompactionContent. The caller controls
+// when to replace its history with the checkpoint.
+type Compactor interface {
+	Compact(context.Context, Call) (*Response, error)
+}
