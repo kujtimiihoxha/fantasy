@@ -491,6 +491,7 @@ func TestSchemaToParametersEdgeCases(t *testing.T) {
 						Format:    "email",
 						MinLength: func() *int { v := 5; return &v }(),
 						MaxLength: func() *int { v := 100; return &v }(),
+						Pattern:   `^[a-z]+@example\.com$`,
 					},
 					"number": {
 						Type:    "number",
@@ -505,6 +506,7 @@ func TestSchemaToParametersEdgeCases(t *testing.T) {
 					"format":    "email",
 					"minLength": 5,
 					"maxLength": 100,
+					"pattern":   `^[a-z]+@example\.com$`,
 				},
 				"number": map[string]any{
 					"type":    "number",
@@ -636,4 +638,19 @@ func TestNormalize_NestedProperties(t *testing.T) {
 	val := node["properties"].(map[string]any)["config"].(map[string]any)["properties"].(map[string]any)["val"].(map[string]any)
 	require.Nil(t, val["type"])
 	require.NotNil(t, val["anyOf"])
+}
+
+func TestValidateAgainstSchemaPattern(t *testing.T) {
+	t.Parallel()
+	s := Schema{
+		Type: "object",
+		Properties: map[string]*Schema{
+			"branch": {Type: "string", Pattern: `^feature/[a-z0-9]+(-[a-z0-9]+)*$`},
+		},
+		Required: []string{"branch"},
+	}
+	require.NoError(t, ValidateAgainstSchema(map[string]any{"branch": "feature/add-login"}, s))
+	require.Error(t, ValidateAgainstSchema(map[string]any{"branch": "Feature/Add Login"}, s))
+	_, err := ParseAndValidate(`{"branch":"feature/--"}`, s)
+	require.Error(t, err)
 }

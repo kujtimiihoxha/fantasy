@@ -40,6 +40,8 @@ type Schema struct {
 	Maximum     *float64           `json:"maximum,omitempty"`
 	MinLength   *int               `json:"minLength,omitempty"`
 	MaxLength   *int               `json:"maxLength,omitempty"`
+	// Pattern is an ECMA-262 regular expression that a string value must match.
+	Pattern string `json:"pattern,omitempty"`
 }
 
 // ParseState represents the state of JSON parsing.
@@ -213,6 +215,10 @@ func ToMap(schema Schema) map[string]any {
 
 	if schema.MaxLength != nil {
 		result["maxLength"] = *schema.MaxLength
+	}
+
+	if schema.Pattern != "" {
+		result["pattern"] = schema.Pattern
 	}
 
 	if schema.Properties != nil {
