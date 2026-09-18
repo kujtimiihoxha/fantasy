@@ -1260,7 +1260,8 @@ func (a *agent) validateToolCall(toolCall ToolCallContent, availableTools []Agen
 
 func (a *agent) createPrompt(system, prompt string, messages []Message, files ...FilePart) (Prompt, error) {
 	// Validation: empty prompt is only allowed when there are messages,
-	// no files to attach, and the last message is a user or tool message.
+	// no files to attach, and the last message is conversational. Assistant
+	// messages can be intermediate output that the caller needs to continue.
 	if prompt == "" {
 		lastMessage, hasMessages := slice.Last(messages)
 
@@ -1279,11 +1280,11 @@ func (a *agent) createPrompt(system, prompt string, messages []Message, files ..
 		}
 
 		switch lastMessage.Role {
-		case MessageRoleUser, MessageRoleTool:
+		case MessageRoleUser, MessageRoleTool, MessageRoleAssistant:
 		default:
 			return nil, &Error{
 				Title:   "invalid argument",
-				Message: "prompt can't be empty when the last message is not a user or tool message",
+				Message: "prompt can't be empty when the last message is not a user, tool, or assistant message",
 			}
 		}
 	}

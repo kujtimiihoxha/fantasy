@@ -553,17 +553,17 @@ func TestAgent_Generate_EmptyPrompt(t *testing.T) {
 		require.Contains(t, err.Error(), "prompt can't be empty when there are files")
 	})
 
-	t.Run("fails when last message is assistant", func(t *testing.T) {
+	t.Run("fails when last message is system", func(t *testing.T) {
 		result, err := agent.Generate(context.Background(), AgentCall{
 			Prompt: "",
 			Messages: []Message{
 				{Role: MessageRoleUser, Content: []MessagePart{TextPart{Text: "hello"}}},
-				{Role: MessageRoleAssistant, Content: []MessagePart{TextPart{Text: "hi there"}}},
+				{Role: MessageRoleSystem, Content: []MessagePart{TextPart{Text: "hi there"}}},
 			},
 		})
 		require.Error(t, err)
 		require.Nil(t, result)
-		require.Contains(t, err.Error(), "prompt can't be empty when the last message is not a user or tool message")
+		require.Contains(t, err.Error(), "prompt can't be empty when the last message is not a user, tool, or assistant message")
 	})
 
 	t.Run("succeeds when last message is user", func(t *testing.T) {
@@ -3039,4 +3039,16 @@ func TestToolResultCallbackFailureIsCritical(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAgentContinuesAssistantMessages(t *testing.T) {
+	t.Parallel()
+	messages := []Message{NewUserMessage("Finish the task"), {Role: MessageRoleAssistant, Content: []MessagePart{TextPart{Text: "Working"}}}}
+	model := &mockLanguageModel{generateFunc: func(_ context.Context, call Call) (*Response, error) {
+		require.Equal(t, Prompt(messages), call.Prompt)
+		return &Response{Content: []Content{TextContent{Text: "Done"}}, FinishReason: FinishReasonStop}, nil
+	}}
+	result, err := NewAgent(model).Generate(t.Context(), AgentCall{Messages: messages})
+	require.NoError(t, err)
+	require.Equal(t, "Done", result.Response.Content.Text())
 }
