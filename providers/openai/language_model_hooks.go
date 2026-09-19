@@ -607,6 +607,19 @@ func DefaultToPrompt(prompt fantasy.Prompt, _, _ string) ([]openai.ChatCompletio
 					messages = append(messages, toolMessage)
 					deferredMedia = append(deferredMedia, mediaMessages...)
 					warnings = append(warnings, mediaWarnings...)
+				case fantasy.ToolResultContentTypeParts:
+					output, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentParts](toolResultPart.Output)
+					if !ok {
+						warnings = append(warnings, fantasy.CallWarning{
+							Type:    fantasy.CallWarningTypeOther,
+							Message: "tool result output does not have the right type",
+						})
+						continue
+					}
+					toolMessage, mediaMessages, mediaWarnings := ToolResultPartsMessages(output, toolResultPart.ToolCallID)
+					messages = append(messages, toolMessage)
+					deferredMedia = append(deferredMedia, mediaMessages...)
+					warnings = append(warnings, mediaWarnings...)
 				default:
 					warnings = append(warnings, fantasy.CallWarning{
 						Type:    fantasy.CallWarningTypeOther,
@@ -653,6 +666,38 @@ func ToolResultMediaMessages(output fantasy.ToolResultOutputContentMedia, toolCa
 	return toolMessage, []openai.ChatCompletionMessageParamUnion{
 		openai.UserMessage([]openai.ChatCompletionContentPartUnionParam{mediaPart}),
 	}, nil
+}
+
+// ToolResultPartsMessages maps a tool-result parts output like
+// ToolResultMediaMessages: the tool message holds the joined text parts, or a
+// placeholder when there are none, and one synthetic user message holds the
+// media parts in order.
+func ToolResultPartsMessages(output fantasy.ToolResultOutputContentParts, toolCallID string) (openai.ChatCompletionMessageParamUnion, []openai.ChatCompletionMessageParamUnion, []fantasy.CallWarning) {
+	var texts []string
+	var mediaParts []openai.ChatCompletionContentPartUnionParam
+	var warnings []fantasy.CallWarning
+	for _, part := range output.Parts {
+		if !part.IsMedia() {
+			texts = append(texts, part.Text)
+			continue
+		}
+		mediaPart, warning, emit := toolResultMediaUserPart(fantasy.ToolResultOutputContentMedia{Data: part.Data, MediaType: part.MediaType})
+		if warning != nil {
+			warnings = append(warnings, *warning)
+		}
+		if emit {
+			mediaParts = append(mediaParts, mediaPart)
+		}
+	}
+	text := strings.Join(texts, "\n")
+	if text == "" {
+		text = "The tool returned media content; see the following user message."
+	}
+	toolMessage := openai.ToolMessage(text, toolCallID)
+	if len(mediaParts) == 0 {
+		return toolMessage, nil, warnings
+	}
+	return toolMessage, []openai.ChatCompletionMessageParamUnion{openai.UserMessage(mediaParts)}, warnings
 }
 
 // toolResultMediaUserPart maps a tool-result media output to an OpenAI chat

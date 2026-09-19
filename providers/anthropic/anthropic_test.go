@@ -543,6 +543,36 @@ func TestToPrompt_DropsEmptyMessages(t *testing.T) {
 		require.Len(t, messages, 1)
 		require.Empty(t, warnings)
 	})
+
+	t.Run("should keep text and images of a parts tool result in order", func(t *testing.T) {
+		t.Parallel()
+
+		prompt := fantasy.Prompt{
+			{
+				Role: fantasy.MessageRoleTool,
+				Content: []fantasy.MessagePart{
+					fantasy.ToolResultPart{
+						ToolCallID: "call_parts",
+						Output: fantasy.ToolResultOutputContentParts{Parts: []fantasy.ToolResultOutputPart{
+							fantasy.NewToolResultTextPart("shown"),
+							fantasy.NewToolResultMediaPart([]byte{1}, "image/png"),
+							fantasy.NewToolResultMediaPart([]byte{2}, "image/jpeg"),
+						}},
+					},
+				},
+			},
+		}
+
+		_, messages, warnings := toPrompt(prompt, true)
+
+		require.Empty(t, warnings)
+		require.Len(t, messages, 1)
+		blocks := messages[0].Content[0].OfToolResult.Content
+		require.Len(t, blocks, 3)
+		require.Equal(t, "shown", blocks[0].OfText.Text)
+		require.NotNil(t, blocks[1].OfImage)
+		require.NotNil(t, blocks[2].OfImage)
+	})
 }
 
 func TestParseContextTooLargeError(t *testing.T) {

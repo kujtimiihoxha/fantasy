@@ -748,6 +748,21 @@ func toResponsesPrompt(prompt fantasy.Prompt, systemMessageMode string, store, f
 							Message: fmt.Sprintf("tool result media type %s not supported, sending text placeholder only", output.MediaType),
 						})
 					}
+				case fantasy.ToolResultContentTypeParts:
+					output, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentParts](toolResultPart.Output)
+					if !ok {
+						warnings = append(warnings, fantasy.CallWarning{
+							Type:    fantasy.CallWarningTypeOther,
+							Message: "tool result output does not have the right type",
+						})
+						continue
+					}
+					items, partWarnings := responsesToolOutputItems(output)
+					warnings = append(warnings, partWarnings...)
+					functionCallOutput := responses.ResponseInputItemParamOfFunctionCallOutput(items)
+					functionCallOutput.OfFunctionCallOutput.CallID = param.NewOpt(toolResultPart.ToolCallID)
+					input = append(input, functionCallOutput)
+					continue
 				default:
 					warnings = append(warnings, fantasy.CallWarning{
 						Type:    fantasy.CallWarningTypeOther,
@@ -767,6 +782,34 @@ func toResponsesPrompt(prompt fantasy.Prompt, systemMessageMode string, store, f
 	}
 
 	return input, warnings
+}
+
+// responsesToolOutputItems maps a parts output to the content list that
+// function_call_output accepts, so images stay inside the tool result.
+// Media other than images is dropped with a warning.
+func responsesToolOutputItems(output fantasy.ToolResultOutputContentParts) (responses.ResponseFunctionCallOutputItemListParam, []fantasy.CallWarning) {
+	var warnings []fantasy.CallWarning
+	items := make(responses.ResponseFunctionCallOutputItemListParam, 0, len(output.Parts))
+	for _, part := range output.Parts {
+		switch {
+		case !part.IsMedia():
+			items = append(items, responses.ResponseFunctionCallOutputItemUnionParam{
+				OfInputText: &responses.ResponseInputTextContentParam{Text: part.Text},
+			})
+		case strings.HasPrefix(part.MediaType, "image/"):
+			items = append(items, responses.ResponseFunctionCallOutputItemUnionParam{
+				OfInputImage: &responses.ResponseInputImageContentParam{
+					ImageURL: param.NewOpt("data:" + part.MediaType + ";base64," + part.Data),
+				},
+			})
+		default:
+			warnings = append(warnings, fantasy.CallWarning{
+				Type:    fantasy.CallWarningTypeOther,
+				Message: fmt.Sprintf("tool result media type %s not supported, dropping it", part.MediaType),
+			})
+		}
+	}
+	return items, warnings
 }
 
 func hasVisibleResponsesUserContent(content responses.ResponseInputMessageContentListParam) bool {

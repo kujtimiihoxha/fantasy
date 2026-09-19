@@ -1044,6 +1044,30 @@ func toPrompt(prompt fantasy.Prompt, sendReasoningData bool) ([]anthropic.TextBl
 								})
 							}
 							toolResultBlock.Content = contentBlocks
+						case fantasy.ToolResultContentTypeParts:
+							content, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentParts](result.Output)
+							if !ok {
+								continue
+							}
+							contentBlocks := make([]anthropic.ToolResultBlockParamContentUnion, 0, len(content.Parts))
+							for _, part := range content.Parts {
+								switch {
+								case !part.IsMedia():
+									contentBlocks = append(contentBlocks, anthropic.ToolResultBlockParamContentUnion{
+										OfText: &anthropic.TextBlockParam{Text: part.Text},
+									})
+								case strings.HasPrefix(part.MediaType, "image/"):
+									contentBlocks = append(contentBlocks, anthropic.ToolResultBlockParamContentUnion{
+										OfImage: anthropic.NewImageBlockBase64(part.MediaType, part.Data).OfImage,
+									})
+								default:
+									warnings = append(warnings, fantasy.CallWarning{
+										Type:    fantasy.CallWarningTypeOther,
+										Message: fmt.Sprintf("tool result media type %s not supported, dropping it", part.MediaType),
+									})
+								}
+							}
+							toolResultBlock.Content = contentBlocks
 						case fantasy.ToolResultContentTypeError:
 							content, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentError](result.Output)
 							if !ok {

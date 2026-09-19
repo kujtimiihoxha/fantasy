@@ -565,6 +565,19 @@ func ToPromptFunc(prompt fantasy.Prompt, _, _ string) ([]openaisdk.ChatCompletio
 					messages = append(messages, toolMessage)
 					deferredMedia = append(deferredMedia, mediaMessages...)
 					warnings = append(warnings, mediaWarnings...)
+				case fantasy.ToolResultContentTypeParts:
+					output, ok := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentParts](toolResultPart.Output)
+					if !ok {
+						warnings = append(warnings, fantasy.CallWarning{
+							Type:    fantasy.CallWarningTypeOther,
+							Message: "tool result output does not have the right type",
+						})
+						continue
+					}
+					toolMessage, mediaMessages, mediaWarnings := openai.ToolResultPartsMessages(output, toolResultPart.ToolCallID)
+					messages = append(messages, toolMessage)
+					deferredMedia = append(deferredMedia, mediaMessages...)
+					warnings = append(warnings, mediaWarnings...)
 				default:
 					warnings = append(warnings, fantasy.CallWarning{
 						Type:    fantasy.CallWarningTypeOther,

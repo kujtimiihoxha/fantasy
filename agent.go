@@ -859,6 +859,10 @@ func (a *agent) executeSingleTool(ctx context.Context, toolMap map[string]AgentT
 		result.Result = ToolResultOutputContentError{
 			Error: errors.New(toolResult.Content),
 		}
+	} else if toolResult.Type == "parts" {
+		result.Result = ToolResultOutputContentParts{
+			Parts: toolResult.Parts,
+		}
 	} else if toolResult.Type == "image" || toolResult.Type == "media" {
 		result.Result = ToolResultOutputContentMedia{
 			Data:      base64.StdEncoding.EncodeToString(toolResult.Data),

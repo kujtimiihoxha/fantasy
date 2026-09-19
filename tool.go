@@ -36,9 +36,11 @@ type ToolResponse struct {
 	Data []byte `json:"data,omitempty"`
 	// MediaType specifies the MIME type of the media (e.g., "image/png", "audio/wav").
 	MediaType string `json:"media_type,omitempty"`
-	Metadata  string `json:"metadata,omitempty"`
-	IsError   bool   `json:"is_error"`
-	StopTurn  bool   `json:"stop_turn,omitempty"`
+	// Parts contains ordered text and media for a parts response.
+	Parts    []ToolResultOutputPart `json:"parts,omitempty"`
+	Metadata string                 `json:"metadata,omitempty"`
+	IsError  bool                   `json:"is_error"`
+	StopTurn bool                   `json:"stop_turn,omitempty"`
 }
 
 // NewTextResponse creates a text response.
@@ -73,6 +75,15 @@ func NewMediaResponse(data []byte, mediaType string) ToolResponse {
 		Type:      "media",
 		Data:      data,
 		MediaType: mediaType,
+	}
+}
+
+// NewPartsResponse creates a response with ordered text and media parts, for
+// example several images. Content is ignored for a parts response.
+func NewPartsResponse(parts ...ToolResultOutputPart) ToolResponse {
+	return ToolResponse{
+		Type:  "parts",
+		Parts: parts,
 	}
 }
 

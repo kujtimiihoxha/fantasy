@@ -539,6 +539,38 @@ func (t *ToolResultOutputContentMedia) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalJSON implements json.Marshaler for ToolResultOutputContentParts.
+func (t ToolResultOutputContentParts) MarshalJSON() ([]byte, error) {
+	type alias ToolResultOutputContentParts
+	dataBytes, err := json.Marshal(alias(t))
+	if err != nil {
+		return nil, err
+	}
+
+	return json.Marshal(toolResultOutputJSON{
+		Type: string(ToolResultContentTypeParts),
+		Data: json.RawMessage(dataBytes),
+	})
+}
+
+// UnmarshalJSON implements json.Unmarshaler for ToolResultOutputContentParts.
+func (t *ToolResultOutputContentParts) UnmarshalJSON(data []byte) error {
+	var tr toolResultOutputJSON
+	if err := json.Unmarshal(data, &tr); err != nil {
+		return err
+	}
+
+	type alias ToolResultOutputContentParts
+	var temp alias
+
+	if err := json.Unmarshal(tr.Data, &temp); err != nil {
+		return err
+	}
+
+	*t = ToolResultOutputContentParts(temp)
+	return nil
+}
+
 // MarshalJSON implements json.Marshaler for TextPart.
 func (t TextPart) MarshalJSON() ([]byte, error) {
 	dataBytes, err := json.Marshal(struct {
@@ -1138,6 +1170,12 @@ func UnmarshalToolResultOutputContent(data []byte) (ToolResultOutputContent, err
 		return content, nil
 	case ToolResultContentTypeMedia:
 		var content ToolResultOutputContentMedia
+		if err := content.UnmarshalJSON(data); err != nil {
+			return nil, err
+		}
+		return content, nil
+	case ToolResultContentTypeParts:
+		var content ToolResultOutputContentParts
 		if err := content.UnmarshalJSON(data); err != nil {
 			return nil, err
 		}

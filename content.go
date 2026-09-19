@@ -2,6 +2,7 @@ package fantasy
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 )
 
@@ -293,6 +294,8 @@ const (
 	ToolResultContentTypeError ToolResultContentType = "error"
 	// ToolResultContentTypeMedia represents content output.
 	ToolResultContentTypeMedia ToolResultContentType = "media"
+	// ToolResultContentTypeParts represents ordered text and media output.
+	ToolResultContentTypeParts ToolResultContentType = "parts"
 )
 
 // ToolResultOutputContent represents the output content of a tool result.
@@ -330,6 +333,40 @@ type ToolResultOutputContentMedia struct {
 // GetType returns the type of the tool result output content media.
 func (t ToolResultOutputContentMedia) GetType() ToolResultContentType {
 	return ToolResultContentTypeMedia
+}
+
+// ToolResultOutputPart is one text or media part of a parts output. A part
+// with a media type is media; otherwise it is text.
+type ToolResultOutputPart struct {
+	Text      string `json:"text,omitempty"`
+	Data      string `json:"data,omitempty"` // base64
+	MediaType string `json:"media_type,omitempty"`
+}
+
+// IsMedia reports whether the part holds media.
+func (p ToolResultOutputPart) IsMedia() bool {
+	return p.MediaType != ""
+}
+
+// NewToolResultTextPart creates a text part for a parts output.
+func NewToolResultTextPart(text string) ToolResultOutputPart {
+	return ToolResultOutputPart{Text: text}
+}
+
+// NewToolResultMediaPart creates a media part for a parts output.
+func NewToolResultMediaPart(data []byte, mediaType string) ToolResultOutputPart {
+	return ToolResultOutputPart{Data: base64.StdEncoding.EncodeToString(data), MediaType: mediaType}
+}
+
+// ToolResultOutputContentParts represents ordered text and media output of a
+// tool result, for example several images with text between them.
+type ToolResultOutputContentParts struct {
+	Parts []ToolResultOutputPart `json:"parts"`
+}
+
+// GetType returns the type of the tool result output content parts.
+func (t ToolResultOutputContentParts) GetType() ToolResultContentType {
+	return ToolResultContentTypeParts
 }
 
 // AsToolResultOutputType converts a ToolResultOutputContent interface to a specific type.
